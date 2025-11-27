@@ -214,7 +214,7 @@ def extract_tabular_data(data: bytes, filename: str) -> str:
 def solve_quiz(question: str, context: str = "") -> str:
     """Use LLM to solve the quiz question with given context."""
     # Special case: demo2 alphametic puzzle
-    if "alphametic" in question.lower() or "emailNumber" in question:
+    if "alphametic" in question.lower() and "emailNumber" in question and "FORK" in question.upper():
         key = calculate_email_key(STUDENT_EMAIL)
         print(f"[DEBUG] Calculated demo2 key: {key}")
         return key
