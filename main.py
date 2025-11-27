@@ -1,6 +1,6 @@
 from dotenv import load_dotenv
 load_dotenv()
-import hashlib
+
 import os
 import json
 import re
@@ -17,15 +17,6 @@ import google.generativeai as genai
 import pandas as pd
 from io import BytesIO, StringIO
 import pdfplumber
-
-def calculate_email_key(email: str) -> str:
-    """Calculate the 8-digit key for demo2 alphametic puzzle"""
-    # emailNumber = first 4 hex of SHA1(email) as integer
-    sha1_hash = hashlib.sha1(email.encode()).hexdigest()
-    email_number = int(sha1_hash[:4], 16)
-    # key = ((emailNumber * 7919 + 12345) mod 1e8)
-    key = (email_number * 7919 + 12345) % 100000000
-    return str(key).zfill(8)  # Pad to 8 digits
 
 # Install Playwright browsers if not present
 try:
@@ -213,7 +204,6 @@ def extract_tabular_data(data: bytes, filename: str) -> str:
 # ---------------------------------------------------------------------------
 def solve_quiz(question: str, context: str = "") -> str:
     """Use LLM to solve the quiz question with given context."""
-
     prompt = f"""You are a quiz-solving AI. Your job is to answer the question using the provided context data.
 
 QUESTION:
