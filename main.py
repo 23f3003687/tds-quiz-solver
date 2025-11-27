@@ -7,6 +7,7 @@ import re
 import base64
 import requests
 import asyncio
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -16,13 +17,13 @@ import google.generativeai as genai
 import pandas as pd
 from io import BytesIO, StringIO
 import pdfplumber
-import subprocess
 
 # Install Playwright browsers if not present
 try:
     subprocess.run(["playwright", "install", "chromium"], check=True, capture_output=True)
 except:
     pass
+
 # ---------------------------------------------------------------------------
 # ENVIRONMENT VARIABLES
 # ---------------------------------------------------------------------------
@@ -96,7 +97,8 @@ Return this JSON format:
     "submit_url": "full URL starting with {base_domain}",
     "data_sources": ["list of ALL file URLs including audio, csv, pdf, etc."],
     "answer_type": "number|string|boolean|json|base64",
-    "cutoff_value": "any numeric cutoff/threshold value found in the HTML, or null if not found"
+    "cutoff_value": "any numeric cutoff/threshold value found in the HTML, or null if not found",
+    "api_headers": {{"header_name": "header_value"}} or null if no special headers needed
 }}
 
 HTML:
@@ -222,6 +224,11 @@ CRITICAL RULES:
 5. Numbers: return plain numbers only (e.g., 42 or 3.14)
 6. Strings: plain text without quotes
 7. Boolean: true or false (lowercase)
+8. If text is REVERSED (like "!dlroWolleH"), reverse it back (becomes "HelloWorld!")
+9. For JavaScript code, EXECUTE the logic mentally:
+   - [10, 20, 30].reduce((a,b) => a+b, 0) = 60
+   - 60 * 2 = 120
+10. If you see hidden-key or reversed text, reverse it to get the answer
 
 EXAMPLE:
 If column header is "96903" and values are [74775, 23534, 98000, 97000]
@@ -229,9 +236,14 @@ And condition is "sum values >= 96903"
 Then: 98000 + 97000 = 195000
 Answer: 195000
 
+EXAMPLE 2:
+If hidden text is "!dlroWolleH" and question asks for un-reversed password:
+Reverse it: HelloWorld!
+Answer: HelloWorld!
+
 Now calculate the answer for the given question:
 
-ANSWER (just the number, nothing else):"""
+ANSWER (just the value, nothing else):"""
 
     response = model.generate_content(prompt)
     answer = response.text.strip()
@@ -253,7 +265,7 @@ ANSWER (just the number, nothing else):"""
 # ---------------------------------------------------------------------------
 # PROCESS DATA SOURCE
 # ---------------------------------------------------------------------------
-def process_data_source_sync(url: str) -> str:
+def process_data_source_sync(url: str, headers: dict = None) -> str:
     """Download and process a data source URL (sync version for thread pool)."""
     try:
         filename = url.split('/')[-1].split('?')[0].lower()
@@ -270,8 +282,38 @@ def process_data_source_sync(url: str) -> str:
                 browser.close()
                 return content
         
+        # For API endpoints with pagination, handle specially
+        if 'page=' in url or '/api/' in url:
+            all_data = []
+            current_url = url
+            page_num = 1
+            
+            while current_url and page_num <= 100:  # Safety limit
+                try:
+                    resp = requests.get(current_url, headers=headers, timeout=30)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    
+                    if isinstance(data, list):
+                        if len(data) == 0:
+                            break  # Empty page, stop
+                        all_data.extend(data)
+                        # Try next page
+                        if 'page=' in current_url:
+                            page_num += 1
+                            current_url = re.sub(r'page=\d+', f'page={page_num}', url)
+                        else:
+                            break
+                    else:
+                        return json.dumps(data, indent=2)
+                except:
+                    break
+            
+            if all_data:
+                return json.dumps(all_data, indent=2)
+        
         # For files, download directly
-        resp = requests.get(url, timeout=30)
+        resp = requests.get(url, headers=headers, timeout=30)
         resp.raise_for_status()
         data = resp.content
         
@@ -319,10 +361,12 @@ Include every number mentioned. Do not summarize - give the complete verbatim tr
     except Exception as e:
         return f"Error processing {url}: {e}"
 
-async def process_data_source(url: str) -> str:
+async def process_data_source(url: str, headers: dict = None) -> str:
     """Run data source processing in thread pool."""
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(executor, process_data_source_sync, url)
+    import functools
+    func = functools.partial(process_data_source_sync, url, headers)
+    return await loop.run_in_executor(executor, func)
 
 # ---------------------------------------------------------------------------
 # PARSE ANSWER TO CORRECT TYPE
@@ -394,13 +438,18 @@ async def solve_quiz_url(url: str) -> dict:
     cutoff_value = quiz_info.get("cutoff_value")
     print(f"[DEBUG] Cutoff value: {cutoff_value}")
     
+    # Get API headers if present
+    api_headers = quiz_info.get("api_headers") or {}
+    if api_headers:
+        print(f"[DEBUG] API headers: {api_headers}")
+    
     if not submit_url:
         raise RuntimeError("Could not find submit URL")
     
     context = ""
     for source_url in data_sources:
         context += f"\n\n=== Data from {source_url} ===\n"
-        source_content = await process_data_source(source_url)
+        source_content = await process_data_source(source_url, api_headers)
         
         # If we have a cutoff value and this is CSV data, add filtered calculations
         if cutoff_value and '.csv' in source_url.lower():
@@ -419,13 +468,13 @@ async def solve_quiz_url(url: str) -> dict:
                 for col in df_with_header.columns:
                     if pd.api.types.is_numeric_dtype(df_with_header[col]):
                         values_above = df_with_header[df_with_header[col] >= cutoff_num][col]
-                        context += f"Sum of values >= {cutoff_num}: {values_above.sum()}\n"
+                        context += f"Sum of values >= {cutoff_num} (with header): {values_above.sum()}\n"
                 
-                context += f"\n--- Without header (first row as data) ---\n"
+                context += f"\n--- Without header (first row as data) - USE THIS ---\n"
                 for col in df_no_header.columns:
                     if pd.api.types.is_numeric_dtype(df_no_header[col]):
                         values_above = df_no_header[df_no_header[col] >= cutoff_num][col]
-                        context += f"Sum of values >= {cutoff_num}: {values_above.sum()}\n"
+                        context += f"[CORRECT ANSWER] Sum of values >= {cutoff_num}: {values_above.sum()}\n"
                         context += f"All values sum: {df_no_header[col].sum()}\n"
             except Exception as e:
                 context += f"Error calculating: {e}\n"
