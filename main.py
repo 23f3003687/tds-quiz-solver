@@ -8,7 +8,6 @@ import base64
 import requests
 import asyncio
 import subprocess
-import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -51,25 +50,6 @@ class QuizRequest(BaseModel):
     secret: str
     url: str
     model_config = ConfigDict(extra="ignore")
-
-# ---------------------------------------------------------------------------
-# CRYPTO HELPERS FOR DEMO2
-# ---------------------------------------------------------------------------
-def compute_sha1_email_number(email: str) -> int:
-    """Compute emailNumber from SHA1 hash of email (first 4 hex chars as int)."""
-    sha1_hash = hashlib.sha1(email.encode()).hexdigest()
-    return int(sha1_hash[:4], 16)
-
-def compute_demo2_key(email: str) -> str:
-    """Compute the 8-digit key for demo2 alphametic puzzle."""
-    email_num = compute_sha1_email_number(email)
-    key = ((email_num * 7919 + 12345) % 100000000)
-    return str(key).zfill(8)
-
-def compute_sha256_checksum(text: str) -> str:
-    """Compute SHA256 and return first 12 hex characters."""
-    sha256_hash = hashlib.sha256(text.encode()).hexdigest()
-    return sha256_hash[:12]
 
 # ---------------------------------------------------------------------------
 # BROWSER: FETCH RENDERED HTML (SYNC - runs in thread)
@@ -222,28 +202,8 @@ def extract_tabular_data(data: bytes, filename: str) -> str:
 # ---------------------------------------------------------------------------
 # SOLVE QUIZ WITH CONTEXT
 # ---------------------------------------------------------------------------
-def solve_quiz(question: str, context: str = "", url: str = "") -> str:
+def solve_quiz(question: str, context: str = "") -> str:
     """Use LLM to solve the quiz question with given context."""
-    
-    # Special handling for demo2 alphametic puzzle
-    if ("emailNumber" in question and "7919" in question and "12345" in question) or \
-       ("ALPHAMETIC" in question.upper() and "F,O,R,K,L,I,M,E" in question):
-        key = compute_demo2_key(STUDENT_EMAIL)
-        print(f"[DEBUG] Demo2 alphametic key computed: {key}")
-        return key
-    
-    # Special handling for demo2 checksum
-    if "SHA256" in question and "first 12 hex" in question:
-        # Extract blob from question
-        blob_match = re.search(r'[bB]lob["\']?\s*[:\)]\s*["`]?([a-f0-9]+)["`]?', question, re.IGNORECASE)
-        if blob_match:
-            blob = blob_match.group(1)
-            key = compute_demo2_key(STUDENT_EMAIL)
-            checksum = compute_sha256_checksum(key + blob)
-            print(f"[DEBUG] Demo2 checksum: SHA256({key} + {blob}) = {checksum}")
-            return checksum
-    
-    # Regular LLM solving
     prompt = f"""You are a quiz-solving AI. Your job is to answer the question using the provided context data.
 
 QUESTION:
@@ -525,7 +485,7 @@ async def solve_quiz_url(url: str) -> dict:
         print(f"[DEBUG] Context length: {len(context)} chars")
         print(f"[DEBUG] Context preview: {context[:500]}")
     
-    raw_answer = solve_quiz(question, context, url)
+    raw_answer = solve_quiz(question, context)
     answer = parse_answer(raw_answer, answer_type)
     
     print(f"[DEBUG] Raw answer: {raw_answer}")
