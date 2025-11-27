@@ -16,7 +16,13 @@ import google.generativeai as genai
 import pandas as pd
 from io import BytesIO, StringIO
 import pdfplumber
+import subprocess
 
+# Install Playwright browsers if not present
+try:
+    subprocess.run(["playwright", "install", "chromium"], check=True, capture_output=True)
+except:
+    pass
 # ---------------------------------------------------------------------------
 # ENVIRONMENT VARIABLES
 # ---------------------------------------------------------------------------
